@@ -3,10 +3,13 @@ from pyspark.sql.functions import from_json, col
 from pyspark.sql.types import StructType, IntegerType, StringType, DoubleType, TimestampType
 
 # Create Spark session
+# Create Spark session with Kafka connector
 spark = SparkSession.builder \
     .appName("ECommerceKafkaConsumer") \
     .master("local[*]") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
     .getOrCreate()
+
 
 spark.sparkContext.setLogLevel("WARN")
 
