@@ -15,3 +15,4 @@ This project builds a hybrid real-time and batch analytics pipeline for an e-com
 - `python -m venv venv`
 - `pip install -r requirements.txt`
 - `remove second editor from project`
+- `Kafka setup is working as expected`
