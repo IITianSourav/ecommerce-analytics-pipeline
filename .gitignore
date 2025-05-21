@@ -4,3 +4,8 @@ __pycache__/
 *.log
 .env
 data/processed/
+# Airflow logs
+airflow/logs/
+docker/logs/
+docker/airflow/logs/
+
