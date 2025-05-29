@@ -22,10 +22,12 @@ schema = StructType() \
 # Read stream from Kafka
 df_kafka = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "host.docker.internal:9092") \
+    .option("kafka.bootstrap.servers", "localhost:9092") \
     .option("subscribe", "ecommerce_orders") \
     .option("startingOffsets", "latest") \
+    .option("failOnDataLoss", "false") \
     .load()
+
 
 # Deserialize, transform, and enrich
 df_orders = df_kafka.selectExpr("CAST(value AS STRING)") \

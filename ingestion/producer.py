@@ -3,10 +3,13 @@ import json
 import time
 import random
 from datetime import datetime
+import os
 
 # Kafka setup
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
+
 producer = KafkaProducer(
-    bootstrap_servers='host.docker.internal:9092',
+    bootstrap_servers=KAFKA_BROKER,
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
 

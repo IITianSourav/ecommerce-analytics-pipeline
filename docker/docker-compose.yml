@@ -13,7 +13,6 @@ services:
 
   airflow:
     image: apache/airflow:2.9.1
-    restart: always
     depends_on:
       - postgres
     environment:
@@ -23,9 +22,11 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     volumes:
-      - ./dags:/opt/airflow/dags
-      - ./logs:/opt/airflow/logs
-      - ./plugins:/opt/airflow/plugins
+      - ../dags:/opt/airflow/dags
+      - ../logs:/opt/airflow/logs
+      - ../plugins:/opt/airflow/plugins
+      - ../data:/opt/airflow/data
+      - ../batch:/opt/airflow/batch         # ✅ Added this line
     ports:
       - "8080:8080"
     command: >
@@ -34,6 +35,27 @@ services:
         airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin &&
         airflow scheduler & airflow webserver
       "
+    restart: always
+
+  kafka:
+    image: bitnami/kafka:3.4.0
+    container_name: docker-kafka-1
+    environment:
+      - KAFKA_KRAFT_MODE=true
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@localhost:9093
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports:
+      - 9092:9092
+    volumes:
+      - kafka_data:/bitnami/kafka
+    restart: always
 
 volumes:
   postgres-db-volume:
+  kafka_data:
