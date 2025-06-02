@@ -7,14 +7,14 @@ import os
 
 # Kafka setup
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
+TOPIC_NAME = os.getenv("KAFKA_TOPIC", "ecommerce_transactions")
+SLEEP_INTERVAL = int(os.getenv("PRODUCER_SLEEP", 2))  # seconds
 
 producer = KafkaProducer(
     bootstrap_servers=KAFKA_BROKER,
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
 
-
-# Generate fake order event
 def generate_order():
     return {
         "order_id": random.randint(1000, 9999),
@@ -24,9 +24,15 @@ def generate_order():
         "timestamp": datetime.utcnow().isoformat()
     }
 
-# Send event every 2 seconds
-while True:
-    event = generate_order()
-    print("Sending event:", event)
-    producer.send('ecommerce_orders', event)
-    time.sleep(2)
+try:
+    while True:
+        event = generate_order()
+        print("Sending event:", event)
+        producer.send(TOPIC_NAME, event)
+        time.sleep(SLEEP_INTERVAL)
+except KeyboardInterrupt:
+    print("Producer stopped.")
+except Exception as e:
+    print(f"Error sending data to Kafka: {e}")
+finally:
+    producer.close()
