@@ -1,0 +1,36 @@
+# streaming/config.yaml
+# Configuration file for Spark Streaming Job
+
+kafka:
+  bootstrap_servers: "localhost:9092"
+  topic_name: "ecommerce_transactions"
+  consumer_group: "spark-streaming-group"
+  
+spark:
+  app_name: "EcommerceStreamingAnalytics"
+  master: "local[*]"  # Use local[*] for local development, cluster URL for production
+  log_level: "WARN"
+  
+processing:
+  watermark_delay: "5 minutes"
+  triggers:
+    console: "30 seconds"
+    json_output: "1 minute"
+    parquet_output: "2 minutes"
+    memory_table: "1 minute"
+  
+windows:
+  revenue_window: "1 minute"
+  product_window: "2 minutes"
+  segment_window: "3 minutes"
+  trend_window: "5 minutes"
+  
+output:
+  base_path: "streaming/data/output"
+  checkpoint_path: "streaming/data/checkpoints"
+  processed_path: "data/processed/streaming"
+  
+monitoring:
+  enable_progress_logging: true
+  log_interval_seconds: 60
+  max_console_rows: 20
