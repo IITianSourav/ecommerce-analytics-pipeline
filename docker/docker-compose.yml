@@ -3,59 +3,186 @@ version: '3.8'
 services:
   postgres:
     image: postgres:13
+    container_name: docker-postgres-1
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: bitnami/kafka:3.4.0
+    container_name: docker-kafka-1
+    environment:
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_LOG_DIRS=/bitnami/kafka/data
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      # Auto-create topics
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    volumes:
+      - kafka_data:/bitnami/kafka
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   airflow:
     image: apache/airflow:2.9.1
+    container_name: docker-airflow-1
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CORE__FERNET_KEY: ''
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      # Add Python path for custom modules
+      PYTHONPATH: '/opt/airflow/dags:/opt/airflow/batch:/opt/airflow'
     volumes:
-      - ../dags:/opt/airflow/dags
-      - ../logs:/opt/airflow/logs
-      - ../plugins:/opt/airflow/plugins
+      - ../airflow_dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
       - ../data:/opt/airflow/data
-      - ../batch:/opt/airflow/batch         # ✅ Added this line
+      - ../batch:/opt/airflow/batch
+      - ../streaming:/opt/airflow/streaming
+      - ../ingestion:/opt/airflow/ingestion
     ports:
       - "8080:8080"
     command: >
       bash -c "
-        airflow db migrate &&
+        echo 'Installing Python dependencies...' &&
+        pip install pandas pyarrow psycopg2-binary pyspark kafka-python pyyaml &&
+        echo 'Initializing Airflow database...' &&
+        airflow db init &&
+        echo 'Creating admin user...' &&
         airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin &&
-        airflow scheduler & airflow webserver
+        echo 'Starting Airflow services...' &&
+        airflow scheduler & 
+        airflow webserver
       "
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  kafka:
-    image: bitnami/kafka:3.4.0
-    container_name: docker-kafka-1
+  spark:
+    image: bitnami/spark:3.5.0
+    container_name: docker-spark-1
+    depends_on:
+      kafka:
+        condition: service_healthy
     environment:
-      - KAFKA_KRAFT_MODE=true
-      - KAFKA_CFG_PROCESS_ROLES=broker,controller
-      - KAFKA_CFG_NODE_ID=1
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@localhost:9093
-      - ALLOW_PLAINTEXT_LISTENER=yes
-    ports:
-      - 9092:9092
+      # Spark configuration
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark
+      - SPARK_MASTER_PORT_NUMBER=7077
+      - SPARK_MASTER_WEBUI_PORT_NUMBER=8081
+      # JAR configuration for Kafka integration
+      - SPARK_EXTRA_CLASSPATH=/opt/spark/extra-jars/*
+      - SPARK_DRIVER_EXTRA_CLASSPATH=/opt/spark/extra-jars/*
+      - SPARK_EXECUTOR_EXTRA_CLASSPATH=/opt/spark/extra-jars/*
+      # Python configuration
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+      - PYTHONPATH=/opt/bitnami/spark/jobs:/opt/bitnami/spark/batch
     volumes:
-      - kafka_data:/bitnami/kafka
+      # Project directories
+      - ../streaming:/opt/bitnami/spark/jobs
+      - ../batch:/opt/bitnami/spark/batch
+      - ../data:/opt/bitnami/spark/data
+      - ../ingestion:/opt/bitnami/spark/ingestion
+      # JAR files and configuration
+      - ./jars:/opt/spark/extra-jars
+      - ./spark-conf:/opt/bitnami/spark/conf
+      # Logs and checkpoints
+      - ./logs/spark:/opt/bitnami/spark/logs
+      - ./checkpoints:/tmp/spark-checkpoints
+    ports:
+      - "4040:4040"  # Spark Application UI
+      - "7077:7077"  # Spark Master
+      - "8081:8081"  # Spark Master Web UI
+    command: >
+      bash -c "
+        echo 'Installing Python dependencies...' &&
+        pip install kafka-python pyyaml &&
+        echo 'Creating necessary directories...' &&
+        mkdir -p /tmp/spark-checkpoints /opt/spark/extra-jars &&
+        echo 'Downloading Kafka connector JARs...' &&
+        cd /opt/spark/extra-jars &&
+        if [ ! -f spark-sql-kafka-0-10_2.12-3.5.0.jar ]; then
+          curl -L https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_2.12/3.5.0/spark-sql-kafka-0-10_2.12-3.5.0.jar -o spark-sql-kafka-0-10_2.12-3.5.0.jar
+        fi &&
+        if [ ! -f kafka-clients-3.4.0.jar ]; then
+          curl -L https://repo1.maven.org/maven2/org/apache/kafka/kafka-clients/3.4.0/kafka-clients-3.4.0.jar -o kafka-clients-3.4.0.jar
+        fi &&
+        echo 'JAR files ready' &&
+        ls -la /opt/spark/extra-jars/ &&
+        echo 'Starting Spark Master...' &&
+        /opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.master.Master --host 0.0.0.0 --port 7077 --webui-port 8081 &
+        echo 'Starting Spark Worker...' &&
+        /opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark:7077 &
+        echo 'Spark cluster started, keeping container alive...' &&
+        tail -f /dev/null
+      "
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Optional: Spark Worker (if you want a separate worker)
+  spark-worker:
+    image: bitnami/spark:3.5.0
+    container_name: docker-spark-worker-1
+    depends_on:
+      - spark
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark:7077
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2g
+    volumes:
+      - ../streaming:/opt/bitnami/spark/jobs
+      - ../batch:/opt/bitnami/spark/batch
+      - ../data:/opt/bitnami/spark/data
+      - ./jars:/opt/spark/extra-jars
+      - ./logs/spark-worker:/opt/bitnami/spark/logs
+    restart: always
+    profiles:
+      - worker  # Optional service, start with: docker-compose --profile worker up
 
 volumes:
   postgres-db-volume:
+    driver: local
   kafka_data:
+    driver: local
+
+networks:
+  default:
+    name: ecommerce-analytics-network
